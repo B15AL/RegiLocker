@@ -1,0 +1,88 @@
+
+================================================================================
+PROJECT BLUEPRINT: SECURE ENCRYPTED FILE VAULT DAEMON (HARDENED C SYSTEMS)
+================================================================================
+
+1. PROJECT OVERVIEW
+--------------------------------------------------------------------------------
+This project is a multi-file, secure storage daemon written in pure C. It 
+listens on a local port, authenticates users securely, and allows them to save,
+retrieve, or delete encrypted notes or files. 
+
+By building it defensively, you will learn:
+* Low-level POSIX socket architecture.
+* Precise memory accounting and buffer validation (defending against overflows).
+* Memory clearing (zeroing out keys/data before freeing memory).
+* Interacting with external system libraries (like OpenSSL for crypto).
+* POSIX process management (forking, privileges, and drop-root operations).
+
+
+2. COMPONENT & MULTI-FILE ARCHITECTURE
+--------------------------------------------------------------------------------
+Create the following directory layout:
+
+secure_vault/
+│
+├── Makefile             # Modern production build management (Strict flags)
+│
+├── include/             # Interface Definitions
+│   ├── network.h        # Socket management and TLS layer prototypes
+│   ├── crypto.h         # AES/ChaCha20 encryption engine wrappers
+│   └── storage.h        # Secure file system access and sanitization routines
+│
+└── src/                 # System Implementations
+    ├── main.c           # Daemon initialization, process isolation, event loop
+    ├── network.c        # Low-level TCP connections and bounds-checked reading
+    ├── crypto.c         # Cryptographic memory operations
+    └── storage.c        # High-performance file I/O and path sanitization
+
+
+3. SYSTEM CORE IMPLEMENTATION REQUIREMENTS
+--------------------------------------------------------------------------------
+
+[ src/network.c - BOUNDS-CHECKED INGESTION ]
+* Objective: Never trust network sizes. Prevent stack/heap corruption.
+* C Learning Point: You cannot use `read()` blindly or functions like `gets()`.
+* Implementation: Implement a strict parsing loop using `recv()`. Read data byte-
+  by-byte or up to a fixed maximum ceiling limit into your memory allocation.
+  Example paradigm:
+    ssize_t bytes_received = recv(client_fd, buffer, MAX_SAFE_SIZE - 1, 0);
+    buffer[bytes_received] = '\0'; // Explicit null termination
+
+[ src/storage.c - PATH SANITIZATION & INTERACTIVE I/O ]
+* Objective: Prevent Directory Traversal vulnerabilities (e.g., ../../../etc/passwd).
+* C Learning Point: String manipulation via `<string.h>` (`strchr`, `strstr`).
+* Implementation: When a client asks to save a file named "my_secrets.txt", you
+  must explicitly parse the string to ensure it contains zero forward slashes,
+  backslashes, or null-byte injections before passing it to C's `fopen()`.
+
+[ src/crypto.c - SECURE MEMORY SANITIZATION ]
+* Objective: Protect keys from being read out of RAM (Heap/Stack clearing).
+* C Learning Point: Standard `free(ptr)` does NOT erase data; it just marks 
+  the memory blocks as available. The old keys remain in raw memory.
+* Implementation: Link against OpenSSL or libsodium. Every time a private key 
+  or unencrypted payload is processed and finished, you must use a cryptographic
+  wipe like `memset_s()` or OpenSSL's `OPENSSL_cleanse()` before calling `free()`.
+
+[ src/main.c - PROCESS ISOLATION & PRIVILEGE DROPPING ]
+* Objective: Defensive engineering. If the app compromises, the OS blocks it.
+* C Learning Point: UNIX System programming APIs (`fork`, `setuid`, `chroot`).
+* Implementation: If your app starts as `root` to bind to a privileged system 
+  port, it must immediately use `chroot()` to lock itself inside an isolated 
+  empty jail directory, then drop privileges to a non-root user via `setuid(1000)`.
+
+
+4. PRODUCTION GCC COMPILATION PARADIGMS (THE EXPLOIT SHIELD)
+--------------------------------------------------------------------------------
+To enforce deep cybersecurity baselines at the compiler level, do not turn features 
+off. Turn them on to maximum defensive engineering standards in your Makefile:
+
+* Enable all warnings:             -Wall -Wextra -Wpedantic
+* Threat warnings as errors:       -Werror
+* Enable Stack Canaries:           -fstack-protector-strong
+* Position Independent Executable: -fPIE -pie
+* Read-Only Relocations (RELRO):   -Wl,-z,relro,-z,now
+* Fortify Source Macros:           -D_FORTIFY_SOURCE=2 -O2
+
+Example Command Target:
+gcc -Wall -Wextra -fstack-protector-strong -fPIE -pie -O2 src/*.c -Iinclude -o secure_vault_daemon -lcrypto
