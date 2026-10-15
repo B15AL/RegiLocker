@@ -2,6 +2,9 @@
 
 Command-line client for the encrypted file vault daemon (`vaultd`). Python 3.8+, standard library only, nothing to install.
 
+
+ ![work descrip](pictures/20261015234522.png)
+ 
 ## Usage
 
 Start the daemon first (`./vaultd` in the vault project), then:
