@@ -1,46 +1,64 @@
-# Encrypted File Vault Daemon
+# vault_client.py
 
-Small C daemon that stores files encrypted (ChaCha20-Poly1305) and serves them over TCP.
+Command-line client for the encrypted file vault daemon (`vaultd`). Python 3.8+, standard library only, nothing to install.
 
-## Build / run
+## Usage
 
-    make            # builds ./vaultd
-    make key        # creates vault.key (32 random bytes, mode 0600)
-    make dirs       # creates vault_storage/ and vault_jail/
-    make test       # crypto self-test + end-to-end tests
-    ./vaultd        # 127.0.0.1:8080
+Start the daemon first (`./vaultd` in the vault project), then:
 
-Options: `-b addr -p port -s storage_dir -k keyfile -j jail_dir -u uid -g gid`
+    # store a file (stored under its own filename)
+    python3 vault_client.py put notes.txt
 
-As root it chroots into the (empty) jail dir and drops to uid/gid 65534.
-As a normal user it skips that step and says so. Back up `vault.key`: without it the data is unrecoverable.
+    # store under a different name
+    python3 vault_client.py put notes.txt --name backup-2026
 
-## Protocol (one request per connection)
+    # store from stdin
+    echo "secret" | python3 vault_client.py put - --name secret.txt
 
-    PUT <name> <len>\n<len bytes>   ->  OK\n
-    GET <name>\n                    ->  OK <len>\n<bytes>
-    DEL <name>\n                    ->  OK\n
-    errors                          ->  ERR <reason>\n
+    # retrieve: saves to ./<name> by default
+    python3 vault_client.py get notes.txt
+    python3 vault_client.py get notes.txt -o /tmp/copy.txt
+    python3 vault_client.py get notes.txt -o -            # print to stdout
+    python3 vault_client.py get notes.txt --force         # overwrite an existing local file
 
-Quick try:
+    # delete
+    python3 vault_client.py del notes.txt
 
-    printf 'PUT hello.txt 5\nhello' | nc 127.0.0.1 8080
-    printf 'GET hello.txt\n'        | nc 127.0.0.1 8080
+Messages go to stderr and file contents to stdout, so `get -o -` is safe to pipe.
+Exit code is 0 on success and 1 on any error.
 
-Names: 1-64 chars of `A-Z a-z 0-9 . _ -`, not starting with `.`. Max file size 1 MiB.
+## Options
 
-## Layout
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--host` | `127.0.0.1` (or env `VAULT_HOST`) | Server address |
+| `--port` | `8080` (or env `VAULT_PORT`) | Server port |
+| `--timeout` | `15` | Network timeout in seconds |
 
-    src/main.c      startup, signals, chroot + privilege drop, accept loop
-    src/network.c   TCP listener + protocol parsing, timeouts
-    src/vault.c     key loading, encrypt/decrypt, on-disk format
-    src/storage.c   safe file I/O (openat on a pre-opened dir fd, atomic writes)
-    src/crypt.c     ChaCha20, Poly1305, AEAD (RFC 8439)
-    tests/          crypto self-test, integration.py
+## Rules
 
-On-disk format: `"VLT1" | nonce(12) | ciphertext | tag(16)`. The name is authenticated, so blobs can't be swapped between names.
+- Vault names: 1-64 characters from `A-Z a-z 0-9 . _ -`, not starting with `.`. The client checks this before connecting.
+- Maximum file size: 1 MiB.
+- `put` on an existing name overwrites it. `get` refuses to overwrite a local file unless you pass `--force`.
 
-## Known limits
+## Common errors
 
-- One client at a time; plain TCP with no authentication. Keep it on localhost or behind a tunnel/firewall.
-- Single master key for all files; no key rotation.
+| Message | Meaning |
+| --- | --- |
+| `cannot connect ... Is vaultd running?` | Daemon is not running, or wrong host/port |
+| `not found` | No file with that name in the vault |
+| `integrity check failed` | The stored file was modified, corrupted, or the daemon is using a different `vault.key` than when it was stored |
+| `invalid name ...` | Name breaks the rules above |
+
+## Use as a library
+
+    import vault_client as vc
+    vc.vault_put("127.0.0.1", 8080, 15, "hello.txt", b"hello")
+    data = vc.vault_get("127.0.0.1", 8080, 15, "hello.txt")
+    vc.vault_del("127.0.0.1", 8080, 15, "hello.txt")
+
+## Security note
+
+The connection is plain TCP and the daemon has no login. Encryption happens on the server, so the data crosses the network unencrypted. Use it on localhost or through an SSH tunnel:
+
+    ssh -L 8080:127.0.0.1:8080 user@server
