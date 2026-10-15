@@ -56,7 +56,13 @@ int main(){
     char buff[8];
     bzero(buff, 8);
 
-    read(acceptfd, buff, sizeof(buff));
+    ssize_t readsize = read(acceptfd, buff, sizeof(buff)-1);
+    if(readsize < 0){
+      printf("file read failed");
+
+    }else{
+      buff[readsize] = '\0';
+    }
     printf("the result got from the client is : %s\n", buff);
 
     close(acceptfd);
